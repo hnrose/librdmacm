@@ -49,6 +49,7 @@
 #include <stddef.h>
 #include <netdb.h>
 #include <syslog.h>
+#include <limits.h>
 
 #include "cma.h"
 #include "indexer.h"
@@ -1035,7 +1036,9 @@ static int rdma_init_qp_attr(struct rdma_cm_id *id, struct ibv_qp_attr *qp_attr,
 static int ucma_modify_qp_rtr(struct rdma_cm_id *id, uint8_t resp_res)
 {
 	struct ibv_qp_attr qp_attr;
+	struct ibv_port_attr port_attr;
 	int qp_attr_mask, ret;
+	uint8_t link_layer;
 
 	if (!id->qp)
 		return ERR(EINVAL);
@@ -1054,6 +1057,17 @@ static int ucma_modify_qp_rtr(struct rdma_cm_id *id, uint8_t resp_res)
 	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
 	if (ret)
 		return ret;
+
+	/* Workaround for rdma_ucm kernel bug */
+	ret = ibv_query_port(id->verbs, id->port_num, &port_attr);
+	if (ret)
+		link_layer = IBV_LINK_LAYER_UNSPECIFIED;
+	else
+		link_layer = port_attr.link_layer;
+
+	if (id->verbs->device->transport_type == IBV_TRANSPORT_IB &&
+	    link_layer == IBV_LINK_LAYER_INFINIBAND)
+		qp_attr_mask &= UINT_MAX ^ 0xe00000;	/* mask off bits 21-24 which are used for RoCE */
 
 	if (resp_res != RDMA_MAX_RESP_RES)
 		qp_attr.max_dest_rd_atomic = resp_res;
